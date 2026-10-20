@@ -273,6 +273,25 @@ class TestParseOptionsHeader(unittest.TestCase):
 
         self.assertEqual(p[b'filename'], b'file.txt')
 
+    def test_redos_attack_header(self):
+        t, p = parse_options_header(b'application/x-www-form-urlencoded; !="\\')
+        # If vulnerable, this test wouldn't finish, the line above would hang
+        self.assertIn(b'"\\', p[b'!'])
+
+    def test_redos_attack_header_long_backslash_run(self):
+        # An unterminated quoted value made of a long run of backslashes made
+        # the old regex-based parser backtrack exponentially.
+        value = b'"' + b'\\' * 5000
+        t, p = parse_options_header(b'application/x-www-form-urlencoded; !=' + value)
+        # If vulnerable, this test wouldn't finish, the line above would hang
+        self.assertEqual(t, b'application/x-www-form-urlencoded')
+        self.assertEqual(p[b'!'], value)
+
+    def test_handles_rfc_2231(self):
+        t, p = parse_options_header(b'text/plain; param*=us-ascii\'en-us\'encoded%20message')
+
+        self.assertEqual(p[b'param'], b'encoded message')
+
 
 class TestBaseParser(unittest.TestCase):
     def setUp(self):
@@ -1184,6 +1203,23 @@ class TestFormParser(unittest.TestCase):
 
         self.assertEqual(fields[2].field_name, b'baz')
         self.assertEqual(fields[2].value, b'asdf')
+
+    def test_redos_attack_content_disposition(self):
+        # The Content-Disposition header of every part goes through
+        # parse_options_header(), so a crafted part header must not hang.
+        name = b'"' + b'\\' * 5000
+        data = (b'--boundary\r\n'
+                b'Content-Disposition: form-data; name=' + name + b'\r\n'
+                b'\r\n'
+                b'test\r\n'
+                b'--boundary--\r\n')
+
+        self.make('boundary')
+        # If vulnerable, this test wouldn't finish, the line below would hang
+        self.f.write(data)
+        self.f.finalize()
+
+        self.assert_field(name, b'test')
 
     def test_max_size_multipart(self):
         # Load test data.
