@@ -1641,6 +1641,33 @@ class TestHelperFunctions(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].size, 10)
 
+    def test_parse_form_negative_content_length(self):
+        with self.assertRaisesRegex(ValueError, 'Content-Length must be non-negative'):
+            parse_form(
+                {'Content-Type': b'application/octet-stream', 'Content-Length': b'-1'},
+                BytesIO(b'123456789012345'),
+                lambda _: None,
+                lambda _: None,
+            )
+
+    def test_parse_form_negative_content_length_does_not_read_body(self):
+        # A negative Content-Length must not turn into an unbounded
+        # input_stream.read(-1) that buffers the whole body.
+        on_file = Mock()
+        stream = BytesIO(b'123456789012345')
+        with self.assertRaises(ValueError):
+            parse_form(
+                {'Content-Type': 'application/octet-stream',
+                 'Content-Length': '-5'
+                 },
+                stream,
+                None,
+                on_file
+            )
+
+        self.assertEqual(stream.tell(), 0)
+        self.assertEqual(on_file.call_count, 0)
+
 
 
 def suite():
