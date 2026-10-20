@@ -1085,6 +1085,106 @@ class TestFormParser(unittest.TestCase):
         with self.assertRaises(MultipartParseError):
             i = self.f.write(data)
 
+    def test_multipart_header_count_limit(self):
+        self.make("poc")
+        payload = b'--poc\r\nContent-Disposition: form-data; name="x"\r\n' + (b"X-A: 1\r\n" * 8)
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header count exceeded"):
+            self.f.write(payload)
+
+    def test_multipart_header_size_limit(self):
+        self.make("poc")
+        payload = b'--poc\r\nContent-Disposition: form-data; name="x"\r\n' + b"X-A: " + (b"a" * (4096 + 124))
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header size exceeded"):
+            self.f.write(payload)
+
+    def test_multipart_header_limits_reset_between_parts(self):
+        # The per-part limits must reset on every part, while still being
+        # tracked across the chunk boundaries of successive write() calls.
+        self.make("boundary")
+
+        long_value = b"a" * 4000
+        data = b""
+        for i in range(5):
+            data += (
+                b"--boundary\r\n"
+                + (b'Content-Disposition: form-data; name="field%d"\r\n' % i)
+                + b"Content-Type: text/plain\r\n"
+                + b"X-Long: "
+                + long_value
+                + b"\r\n"
+                + b"\r\n"
+                + (b"value%d\r\n" % i)
+            )
+        data += b"--boundary--\r\n"
+
+        # Feed in small chunks, so that a single header line spans several writes.
+        for start in range(0, len(data), 512):
+            self.f.write(data[start : start + 512])
+        self.f.finalize()
+
+        for i in range(5):
+            self.assert_field(b"field%d" % i, b"value%d" % i)
+
+    def test_multipart_header_field_name_size_limit(self):
+        # An oversized header field name (no colon) must also be bounded.
+        self.make("poc")
+        payload = b"--poc\r\n" + b"X" * (4096 + 129)
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header size exceeded"):
+            self.f.write(payload)
+
+    def test_multipart_header_leading_whitespace_size_limit(self):
+        # Whitespace before a header value counts towards the header size.
+        self.make("poc")
+        payload = b"--poc\r\nX-A:" + b" " * (4096 + 128)
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header size exceeded"):
+            self.f.write(payload)
+
+    def test_multipart_header_size_limit_across_chunks(self):
+        # The header size must be tracked across write() calls.
+        self.make("poc")
+        payload = b'--poc\r\nContent-Disposition: form-data; name="x"\r\n' + b"X-A: " + (b"a" * (4096 + 124))
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header size exceeded"):
+            for start in range(0, len(payload), 512):
+                self.f.write(payload[start : start + 512])
+
+    def test_multipart_header_count_limit_across_chunks(self):
+        # A header block that never terminates, fed one byte at a time, must
+        # still hit the header count limit.
+        self.make("poc")
+        payload = b'--poc\r\nContent-Disposition: form-data; name="x"\r\n' + (b"X-A: 1\r\n" * 1000)
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header count exceeded"):
+            for start in range(len(payload)):
+                self.f.write(payload[start : start + 1])
+
+    def test_multipart_header_limits_configurable(self):
+        # The limits are configurable through the FormParser config.
+        self.make("poc", config={"MAX_HEADER_COUNT": 2})
+        payload = (
+            b'--poc\r\nContent-Disposition: form-data; name="x"\r\n'
+            + b"Content-Type: text/plain\r\n"
+            + b"X-A: 1\r\n"
+        )
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header count exceeded"):
+            self.f.write(payload)
+
+        self.make("poc", config={"MAX_HEADER_SIZE": 64})
+        payload = b'--poc\r\nContent-Disposition: form-data; name="x"\r\n' + b"X-A: " + (b"a" * 60)
+        with self.assertRaisesRegex(MultipartParseError, "Maximum header size exceeded"):
+            self.f.write(payload)
+
+        # Exactly at the limits is allowed.
+        self.make("poc", config={"MAX_HEADER_COUNT": 2, "MAX_HEADER_SIZE": 64})
+        data = (
+            b'--poc\r\nContent-Disposition: form-data; name="x"\r\n'
+            + b"X-A: " + (b"a" * 59) + b"\r\n"
+            + b"\r\n"
+            + b"value\r\n"
+            + b"--poc--\r\n"
+        )
+        self.f.write(data)
+        self.f.finalize()
+        self.assert_field(b"x", b"value")
+
     def test_octet_stream(self):
         files = []
         def on_file(f):
@@ -1224,7 +1324,9 @@ class TestFormParser(unittest.TestCase):
                 b'test\r\n'
                 b'--boundary--\r\n')
 
-        self.make('boundary')
+        # The header line is longer than the default MAX_HEADER_SIZE, so raise
+        # the limit to let it reach parse_options_header().
+        self.make('boundary', config={'MAX_HEADER_SIZE': 8192})
         # If vulnerable, this test wouldn't finish, the line below would hang
         self.f.write(data)
         self.f.finalize()
