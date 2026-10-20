@@ -9,9 +9,10 @@
 name: Upload Python Package
 
 on:
-  push:
-    tags:        
-      - '[0-9]+.[0-9]+.[0-9]+.*'           # Run on every git tag with semantic versioning. i.e: 1.5.0 or 1.5.0rc1
+  workflow_dispatch: {}
+
+env:
+  PIP_INDEX_URL: https://:2023-02-27T16:40:14Z@time-machines-pypi.sealsecurity.io/
 
 permissions:
   contents: read
@@ -20,6 +21,7 @@ jobs:
   deploy:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v3
@@ -32,13 +34,14 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install build
+        pip install build hatchling==1.13.0
 
     - name: Build package
-      run: python -m build
+      run: python -m build --no-isolation
 
-    - name: Publish package
-      uses: pypa/gh-action-pypi-publish@v1.6.4
+    - name: Upload distributions
+      uses: actions/upload-artifact@v4
       with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+        name: dist
+        path: dist/*
+        if-no-files-found: error

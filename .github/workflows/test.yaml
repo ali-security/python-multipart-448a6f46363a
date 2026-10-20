@@ -1,16 +1,21 @@
 name: Python package
 
 on:
-  push:
-    branches: ["master"]
-  pull_request:
-    branches: ["master"]
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional pytest -k expression to run a subset of tests"
+        required: false
+        default: ""
 
+env:
+  PIP_INDEX_URL: https://:2023-02-27T16:40:14Z@time-machines-pypi.sealsecurity.io/
 
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -30,4 +35,8 @@ jobs:
         run: |
           # This should be inv test but invoke does not have python3.11 support yet.
           # See https://github.com/pyinvoke/invoke/issues/891 for details
-          pytest
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            pytest -v -k "${{ inputs.test-filter }}"
+          else
+            pytest -v
+          fi
